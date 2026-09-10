@@ -78,10 +78,10 @@ def setup_desktop(
                     os.remove(desktop_path)
                     print('Successfully uninstalled the desktop entry')
                     return 0
-                except:
+                except OSError as error:
                     raise OSError(
                         f'Something went wrong, unable to remove the desktop entry {desktop_path}'
-                    )
+                    ) from error
             elif remove.lower() == 'n':
                 print(
                     'Not removing the desktop entry;' \

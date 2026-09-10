@@ -1,18 +1,26 @@
-from pix2tex.dataset.dataset import Im2LatexDataset
-import os
 import argparse
 import logging
-import yaml
+import os
 
 import torch
+import wandb
+import yaml
 from munch import Munch
 from tqdm.auto import tqdm
-import wandb
-import torch.nn as nn
+
+from pix2tex.dataset.dataset import Im2LatexDataset
 from pix2tex.eval import evaluate
 from pix2tex.models import get_model
+
 # from pix2tex.utils import *
-from pix2tex.utils import in_model_path, parse_args, seed_everything, get_optimizer, get_scheduler, gpu_memory_check
+from pix2tex.utils import (
+    get_optimizer,
+    get_scheduler,
+    gpu_memory_check,
+    in_model_path,
+    parse_args,
+    seed_everything,
+)
 
 
 def train(args):
@@ -31,7 +39,9 @@ def train(args):
     os.makedirs(out_path, exist_ok=True)
 
     if args.load_chkpt is not None:
-        model.load_state_dict(torch.load(args.load_chkpt, map_location=device))
+        model.load_state_dict(
+            torch.load(args.load_chkpt, map_location=device, weights_only=True)
+        )
 
     def save_models(e, step=0):
         torch.save(model.state_dict(), os.path.join(out_path, '%s_e%02d_step%02d.pth' % (args.name, e+1, step)))
@@ -75,7 +85,7 @@ def train(args):
     except KeyboardInterrupt:
         if e >= 2:
             save_models(e, step=i)
-        raise KeyboardInterrupt
+        raise
     save_models(e, step=len(dataloader))
 
 
@@ -89,8 +99,8 @@ if __name__ == '__main__':
     if parsed_args.config is None:
         with in_model_path():
             parsed_args.config = os.path.realpath('settings/debug.yaml')
-    with open(parsed_args.config, 'r') as f:
-        params = yaml.load(f, Loader=yaml.FullLoader)
+    with open(parsed_args.config, 'r', encoding='utf-8') as f:
+        params = yaml.safe_load(f)
     args = parse_args(Munch(params), **vars(parsed_args))
     logging.getLogger().setLevel(logging.DEBUG if parsed_args.debug else logging.WARNING)
     seed_everything(args.seed)

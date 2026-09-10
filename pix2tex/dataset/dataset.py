@@ -1,21 +1,21 @@
+import glob
+import logging
+import os
+import pickle
+from collections import defaultdict
+from os.path import join
+
+import cv2
+import imagesize
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-import numpy as np
-import imagesize
-import logging
-import glob
-import os
-from os.path import join
-from collections import defaultdict
-import pickle
-import cv2
-from transformers import PreTrainedTokenizerFast
 from tqdm.auto import tqdm
+from transformers import PreTrainedTokenizerFast
 
+from pix2tex.dataset.transforms import test_transform, train_transform
 from pix2tex.utils.utils import in_model_path
-from pix2tex.dataset.transforms import train_transform, test_transform
-
 
 
 class Im2LatexDataset:
@@ -32,8 +32,6 @@ class Im2LatexDataset:
     bos_token_id = 1
     eos_token_id = 2
     transform = train_transform
-    data = defaultdict(lambda: [])
-
     def __init__(self, equations=None, images=None, tokenizer=None, shuffle=True, batchsize=16, max_seq_len=1024,
                  max_dimensions=(1024, 512), min_dimensions=(32, 32), pad=False, keep_smaller_batches=False, test=False):
         """Generates a torch dataset from pairs of `equations` and `images`.
@@ -42,7 +40,7 @@ class Im2LatexDataset:
             equations (str, optional): Path to equations. Defaults to None.
             images (str, optional): Directory where images are saved. Defaults to None.
             tokenizer (str, optional): Path to saved tokenizer. Defaults to None.
-            shuffle (bool, opitonal): Defaults to True. 
+            shuffle (bool, opitonal): Defaults to True.
             batchsize (int, optional): Defaults to 16.
             max_seq_len (int, optional): Defaults to 1024.
             max_dimensions (tuple(int, int), optional): Maximal dimensions the model can handle
@@ -52,12 +50,18 @@ class Im2LatexDataset:
             test (bool): Whether to use the test transformation or not. Defaults to False.
         """
 
+        self.data = defaultdict(list)
+        self.size = 0
+        self.i = 0
         if images is not None and equations is not None:
             assert tokenizer is not None
             self.images = [path.replace('\\', '/') for path in glob.glob(join(images, '*.png'))]
             self.sample_size = len(self.images)
-            eqs = open(equations, 'r').read().split('\n')
+            with open(equations, 'r', encoding='utf-8') as equation_file:
+                eqs = equation_file.read().split('\n')
             self.indices = [int(os.path.basename(img).split('.')[0]) for img in self.images]
+            if self.indices and max(self.indices) >= len(eqs):
+                raise ValueError("An image index has no corresponding equation")
             self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer)
             self.shuffle = shuffle
             self.batchsize = batchsize
@@ -121,25 +125,40 @@ class Im2LatexDataset:
         """
 
         eqs, ims = batch.T
-        tok = self.tokenizer(list(eqs), return_token_type_ids=False)
-        # pad with bos and eos token
-        for k, p in zip(tok, [[self.bos_token_id, self.eos_token_id], [1, 1]]):
-            tok[k] = pad_sequence([torch.LongTensor([p[0]]+x+[p[1]]) for x in tok[k]], batch_first=True, padding_value=self.pad_token_id)
-        # check if sequence length is too long
-        if self.max_seq_len < tok['attention_mask'].shape[1]:
-            return next(self)
         images = []
-        for path in list(ims):
+        valid_equations = []
+        for equation, path in zip(eqs, ims, strict=True):
             im = cv2.imread(path)
             if im is None:
-                print(path, 'not found!')
+                logging.warning("Image not found or unreadable: %s", path)
                 continue
             im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
-            if not self.test:
-                # sometimes convert to bitmask
-                if np.random.random() < .04:
-                    im[im != 255] = 0
+            if not self.test and np.random.random() < .04:
+                im[im != 255] = 0
             images.append(self.transform(image=im)['image'][:1])
+            valid_equations.append(equation)
+        if not images:
+            return None, None
+
+        tok = self.tokenizer(valid_equations, return_token_type_ids=False)
+        # pad with bos and eos token
+        tok['input_ids'] = pad_sequence(
+            [
+                torch.LongTensor([self.bos_token_id] + values + [self.eos_token_id])
+                for values in tok['input_ids']
+            ],
+            batch_first=True,
+            padding_value=self.pad_token_id,
+        )
+        tok['attention_mask'] = pad_sequence(
+            [torch.LongTensor([1] + values + [1]) for values in tok['attention_mask']],
+            batch_first=True,
+            padding_value=0,
+        )
+        # check if sequence length is too long
+        if self.max_seq_len < tok['attention_mask'].shape[1]:
+            logging.warning("Skipping a batch whose token sequence exceeds %s", self.max_seq_len)
+            return None, None
         try:
             images = torch.cat(images).float().unsqueeze(1)
         except RuntimeError:
@@ -156,8 +175,11 @@ class Im2LatexDataset:
             div, mod = divmod(len(self.data[k]), self.batchsize)
             self.size += div  # + (1 if mod > 0 else 0)
 
-    def load(self, filename, args=[]):
-        """returns a pickled version of a dataset
+    def load(self, filename):
+        """Load a trusted, locally generated pickled dataset.
+
+        Pickle is intentionally retained for compatibility with the published
+        training data. Never pass a file from an untrusted source.
 
         Args:
             filename (str): Path to dataset
@@ -168,7 +190,7 @@ class Im2LatexDataset:
                 if os.path.exists(tempf):
                     filename = os.path.realpath(tempf)
         with open(filename, 'rb') as file:
-            x = pickle.load(file)
+            x = pickle.load(file)  # nosec B301
         return x
 
     def combine(self, x):
@@ -248,7 +270,7 @@ if __name__ == '__main__':
     elif args.images is not None and args.equations is not None:
         print('Generate dataset')
         dataset = None
-        for images, equations in zip(args.images, args.equations):
+        for images, equations in zip(args.images, args.equations, strict=True):
             if dataset is None:
                 dataset = Im2LatexDataset(equations, images, args.tokenizer)
             else:

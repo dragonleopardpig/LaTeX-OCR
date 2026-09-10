@@ -2,8 +2,9 @@ import argparse
 import html
 import os
 import re
-import numpy as np
 from typing import List
+
+import numpy as np
 
 MIN_CHARS = 1
 MAX_CHARS = 3000
@@ -75,7 +76,7 @@ def clean_matches(matches, min_chars=MIN_CHARS):
 
 
 def find_math(s: str, wiki=False) -> List[str]:
-    r"""Find all occurences of math in a Latex-like document. 
+    r"""Find all occurences of math in a Latex-like document.
 
     Args:
         s (str): String to search
@@ -93,7 +94,7 @@ def find_math(s: str, wiki=False) -> List[str]:
     else:
         patterns = [displaymath]
         groups = [0]
-    for i, pattern in zip(groups, patterns):
+    for i, pattern in zip(groups, patterns, strict=True):
         x = re.findall(pattern, s)
         matches.extend([g[i] for g in x])
 
@@ -120,4 +121,3 @@ if __name__ == '__main__':
     else:
         with open(args.out, 'w') as f:
             f.write(math)
-    

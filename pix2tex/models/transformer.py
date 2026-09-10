@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
+from x_transformers import Decoder, TransformerWrapper
 from x_transformers.autoregressive_wrapper import AutoregressiveWrapper, top_k, top_p
-from x_transformers import TransformerWrapper, Decoder
 
 
 class CustomARWrapper(AutoregressiveWrapper):
@@ -10,7 +10,6 @@ class CustomARWrapper(AutoregressiveWrapper):
 
     @torch.no_grad()
     def generate(self, start_tokens, seq_len=256, eos_token=None, temperature=1., filter_logits_fn=top_k, filter_thres=0.9, **kwargs):
-        device = start_tokens.device
         was_training = self.net.training
         num_dims = len(start_tokens.shape)
 

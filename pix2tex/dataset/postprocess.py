@@ -1,4 +1,5 @@
 import argparse
+
 from tqdm.auto import tqdm
 
 if __name__ == '__main__':

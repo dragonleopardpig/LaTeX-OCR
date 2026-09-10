@@ -1,5 +1,6 @@
-import unittest
 import re
+import unittest
+
 from pix2tex.dataset.demacro import pydemacro
 
 
@@ -24,7 +25,7 @@ class TestDemacroCases(unittest.TestCase):
 
     def test_optional_arg(self):
         inp = r'''
-        \newcommand{\example}[2][YYY]{Mandatory arg: #2; Optional arg: #1.}     
+        \newcommand{\example}[2][YYY]{Mandatory arg: #2; Optional arg: #1.}
         \example{BBB}
         \example[XXX]{AAA}
         '''

@@ -1,33 +1,120 @@
-from shutil import which
+import html
 import io
-import subprocess
-import sys
+import logging
 import os
 import re
+import subprocess
+import sys
 import tempfile
+from pathlib import Path
+from shutil import which
+
+import numpy as np
+from latex2sympy2 import latex2sympy
+from PIL import Image, ImageEnhance, ImageGrab
 from PyQt6 import QtCore, QtGui
-from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal, QThread, QTimer, QEvent
+from PyQt6.QtCore import QEvent, Qt, QThread, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import QMainWindow, QApplication, QMessageBox, QVBoxLayout, QWidget, \
-    QPushButton, QTextEdit, QFormLayout, QHBoxLayout, QDoubleSpinBox, QLabel, QRadioButton
-from pynput.mouse import Controller
-
-from PIL import ImageGrab, Image, ImageEnhance
-import numpy as np
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDoubleSpinBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 from screeninfo import get_monitors
-from pix2tex import cli
-from pix2tex.utils import in_model_path
-from latex2sympy2 import latex2sympy
 
-import pix2tex.resources.resources
+from pix2tex import cli
 
 ACCEPTED_IMAGE_SUFFIX = ['png', 'jpg', 'jpeg']
+RESOURCE_DIRECTORY = Path(__file__).resolve().parent / 'resources'
 
 def to_sympy(latex):
-    normalized = re.sub(r'operatorname\*{(\w+)}', '\g<1>', latex)
+    normalized = re.sub(r'operatorname\*{(\w+)}', r'\g<1>', latex)
     sympy_expr = latex2sympy(f'${normalized}$')
     return sympy_expr
+
+
+def screenshot_tool() -> str:
+    """Select a capture backend suitable for the active desktop session."""
+    requested = os.environ.get('SCREENSHOT_TOOL')
+    supported = {'gnome-screenshot', 'spectacle', 'grim', 'pil'}
+    if requested:
+        if requested not in supported:
+            raise ValueError(
+                f"Unsupported SCREENSHOT_TOOL={requested!r}; choose one of {sorted(supported)}"
+            )
+        return requested
+
+    desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
+    session = os.environ.get('XDG_SESSION_TYPE', '').lower()
+    if session == 'wayland':
+        if 'kde' in desktop and which('spectacle'):
+            return 'spectacle'
+        if which('grim') and which('slurp'):
+            return 'grim'
+    if which('gnome-screenshot'):
+        return 'gnome-screenshot'
+    if which('spectacle'):
+        return 'spectacle'
+    if which('grim') and which('slurp'):
+        return 'grim'
+    return 'pil'
+
+
+def prediction_page(prediction: str) -> str:
+    """Build a self-contained, injection-safe MathJax preview page."""
+    escaped_prediction = html.escape(prediction, quote=True)
+    return f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta http-equiv="Content-Security-Policy"
+            content="default-src 'none'; script-src 'self' file: 'unsafe-inline';
+                     worker-src blob:; style-src 'unsafe-inline';
+                     font-src data:; img-src 'self' file: data:">
+      <script>
+        window.MathJax = {{
+          startup: {{
+            typeset: false,
+            ready: () => {{
+              MathJax.startup.defaultReady();
+              Object.assign(MathJax.startup.document.options, {{
+                enableBraille: false,
+                enableEnrichment: false,
+                enableExplorer: false,
+                enableSpeech: false
+              }});
+            }}
+          }},
+          svg: {{fontCache: 'local'}},
+          options: {{
+            enableMenu: false
+          }}
+        }};
+      </script>
+      <script defer src="MathJax.js"
+              onload="document.getElementById('equation').style.visibility = 'visible';
+                MathJax.typesetPromise([document.getElementById('equation')])
+                  .catch((error) => console.error(error))">
+      </script>
+    </head>
+    <body>
+      <div id="equation" style="font-size:1em; visibility:hidden">
+        \\[{escaped_prediction}\\]
+      </div>
+    </body>
+    </html>
+    """
 
 
 class WebView(QWebEngineView):
@@ -51,15 +138,15 @@ class App(QMainWindow):
 
     def __init__(self, args=None):
         super().__init__()
-        self.args = args
-        self.model = cli.LatexOCR(self.args)
+        self.model = cli.LatexOCR(args)
+        self.args = self.model.args
         self.initUI()
         self.snipWidget = SnipWidget(self)
         self.show()
 
     def initUI(self):
         self.setWindowTitle("LaTeX OCR")
-        QApplication.setWindowIcon(QtGui.QIcon(':/icons/icon.svg'))
+        QApplication.setWindowIcon(QtGui.QIcon(str(RESOURCE_DIRECTORY / 'icon.svg')))
         self.left = 300
         self.top = 300
         self.width = 500
@@ -186,17 +273,12 @@ class App(QMainWindow):
     @pyqtSlot()
     def onClick(self):
         self.close()
-        if os.environ.get('SCREENSHOT_TOOL') == "gnome-screenshot":
+        tool = screenshot_tool()
+        if tool == "gnome-screenshot":
             self.snip_using_gnome_screenshot()
-        elif os.environ.get('SCREENSHOT_TOOL') == "spectacle":
+        elif tool == "spectacle":
             self.snip_using_spectacle()
-        elif os.environ.get('SCREENSHOT_TOOL') == "grim":
-            self.snip_using_grim()
-        elif os.environ.get('SCREENSHOT_TOOL') == "pil":
-            self.snipWidget.snip()
-        elif which('gnome-screenshot'):
-            self.snip_using_gnome_screenshot()
-        elif which('grim') and which('slurp'):
+        elif tool == "grim":
             self.snip_using_grim()
         else:
             self.snipWidget.snip()
@@ -204,28 +286,36 @@ class App(QMainWindow):
     @pyqtSlot()
     def interrupt(self):
         if hasattr(self, 'thread'):
-            self.thread.terminate()
-            self.thread.wait()
-            self.toggleProcessing(False)
+            self.thread.requestInterruption()
+            self.snipButton.setText('Stopping after current inference…')
+            self.snipButton.setEnabled(False)
 
     def snip_using_gnome_screenshot(self):
         try:
             with tempfile.NamedTemporaryFile() as tmp:
-                subprocess.run(["gnome-screenshot", "--area", f"--file={tmp.name}"])
+                subprocess.run(
+                    ["gnome-screenshot", "--area", f"--file={tmp.name}"],
+                    check=True,
+                    timeout=120,
+                )
                 # Use `tmp.name` instead of `tmp.file` due to compatability issues between Pillow and tempfile
                 self.returnSnip(Image.open(tmp.name))
-        except:
-            print(f"Failed to load saved screenshot! Did you cancel the screenshot?")
+        except (OSError, subprocess.SubprocessError):
+            print("Failed to load saved screenshot! Did you cancel the screenshot?")
             print("If you don't have gnome-screenshot installed, please install it.")
             self.returnSnip()
 
     def snip_using_spectacle(self):
         try:
             with tempfile.NamedTemporaryFile() as tmp:
-                subprocess.run(["spectacle", "-r", "-b", "-n", "-o", f"{tmp.name}"])
+                subprocess.run(
+                    ["spectacle", "-r", "-b", "-n", "-o", tmp.name],
+                    check=True,
+                    timeout=120,
+                )
                 self.returnSnip(Image.open(tmp.name))
-        except:
-            print(f"Failed to load saved screenshot! Did you cancel the screenshot?")
+        except (OSError, subprocess.SubprocessError):
+            print("Failed to load saved screenshot! Did you cancel the screenshot?")
             print("If you don't have spectacle installed, please install it.")
             self.returnSnip()
 
@@ -241,8 +331,8 @@ class App(QMainWindow):
                                check=True,
                                capture_output=True)
             self.returnSnip(Image.open(io.BytesIO(p.stdout)))
-        except:
-            print(f"Failed to load saved screenshot! Did you cancel the screenshot?")
+        except (OSError, subprocess.SubprocessError):
+            print("Failed to load saved screenshot! Did you cancel the screenshot?")
             print("If you don't have slurp and grim installed, please install them.")
             self.returnSnip()
 
@@ -251,7 +341,8 @@ class App(QMainWindow):
             return
 
         image_url = urls[0]
-        if image_url and image_url.scheme() == 'file' and image_url.fileName().split('.')[-1] in ACCEPTED_IMAGE_SUFFIX:
+        suffix = image_url.fileName().rsplit('.', 1)[-1].lower()
+        if image_url and image_url.scheme() == 'file' and suffix in ACCEPTED_IMAGE_SUFFIX:
             image_path = image_url.toLocalFile()
             return self.returnSnip(Image.open(image_path))
 
@@ -259,7 +350,7 @@ class App(QMainWindow):
         self.toggleProcessing(True)
         self.retryButton.setEnabled(False)
 
-        if img:
+        if img is not None:
             width, height = img.size
             if width <= 0 or height <= 0:
                 self.toggleProcessing(False)
@@ -282,16 +373,19 @@ class App(QMainWindow):
             self.model.args.temperature = self.tempField.value()
             if self.model.args.temperature == 0:
                 self.model.args.temperature = 1e-8
-        except:
-            pass
+        except (AttributeError, TypeError, ValueError):
+            logging.getLogger(__name__).debug("Could not update model temperature")
         # Run the model in a separate thread
         self.thread = ModelThread(img=img, model=self.model)
-        self.thread.finished.connect(self.returnPrediction)
+        self.thread.result_ready.connect(self.returnPrediction)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.start()
 
     def returnPrediction(self, result):
         self.toggleProcessing(False)
+        self.snipButton.setEnabled(True)
+        if result.get("cancelled"):
+            return
         success, prediction = result["success"], result["prediction"]
 
         if success:
@@ -359,33 +453,20 @@ class App(QMainWindow):
     def displayPrediction(self, prediction=None):
         if self.isProcessing:
             pageSource = """<center>
-            <img src="qrc:/icons/processing-icon-anim.svg" width="50", height="50">
+            <img src="processing-icon-anim.svg" width="50", height="50">
             </center>"""
         else:
             if prediction is None:
                 prediction = self.textbox.toPlainText().strip('$')
-            pageSource = """
-            <html>
-            <head><script id="MathJax-script" src="qrc:MathJax.js"></script>
-            <script>
-            MathJax.Hub.Config({messageStyle: 'none',tex2jax: {preview: 'none'}});
-            MathJax.Hub.Queue(
-                function () {
-                    document.getElementById("equation").style.visibility = "";
-                }
-                );
-            </script>
-            </head> """ + """
-            <body>
-            <div id="equation" style="font-size:1em; visibility:hidden">$${equation}$$</div>
-            </body>
-            </html>
-                """.format(equation=prediction)
-        self.webView.setHtml(pageSource)
+            pageSource = prediction_page(prediction)
+        self.webView.setHtml(
+            pageSource,
+            QUrl.fromLocalFile(str(RESOURCE_DIRECTORY) + os.sep),
+        )
 
 
 class ModelThread(QThread):
-    finished = pyqtSignal(dict)
+    result_ready = pyqtSignal(dict)
 
     def __init__(self, img, model):
         super().__init__()
@@ -394,14 +475,17 @@ class ModelThread(QThread):
 
     def run(self):
         try:
-            prediction = self.model(self.img)
-            # replace <, > with \lt, \gt so it won't be interpreted as html code
-            prediction = prediction.replace('<', '\\lt ').replace('>', '\\gt ')
-            self.finished.emit({"success": True, "prediction": prediction})
-        except Exception as e:
+            prediction = self.model(self.img, copy_to_clipboard=False)
+            if self.isInterruptionRequested():
+                self.result_ready.emit(
+                    {"success": False, "prediction": None, "cancelled": True}
+                )
+                return
+            self.result_ready.emit({"success": True, "prediction": prediction})
+        except Exception:
             import traceback
             traceback.print_exc()
-            self.finished.emit({"success": False, "prediction": None})
+            self.result_ready.emit({"success": False, "prediction": None})
 
 
 class SnipWidget(QMainWindow):
@@ -419,8 +503,6 @@ class SnipWidget(QMainWindow):
 
         self.begin = QtCore.QPoint()
         self.end = QtCore.QPoint()
-
-        self.mouse = Controller()
 
         # Create and start the timer
         self.factor = QGuiApplication.primaryScreen().devicePixelRatio()
@@ -470,7 +552,7 @@ class SnipWidget(QMainWindow):
         event.accept()
 
     def mousePressEvent(self, event):
-        self.startPos = self.mouse.position
+        self.startPos = event.globalPosition().toPoint()
 
         self.begin = event.pos()
         self.end = self.begin
@@ -485,12 +567,12 @@ class SnipWidget(QMainWindow):
         QApplication.restoreOverrideCursor()
 
         startPos = self.startPos
-        endPos = self.mouse.position
+        endPos = event.globalPosition().toPoint()
 
-        x1 = int(min(startPos[0], endPos[0]))
-        y1 = int(min(startPos[1], endPos[1]))
-        x2 = int(max(startPos[0], endPos[0]))
-        y2 = int(max(startPos[1], endPos[1]))
+        x1 = min(startPos.x(), endPos.x())
+        y1 = min(startPos.y(), endPos.y())
+        x2 = max(startPos.x(), endPos.x())
+        y2 = max(startPos.y(), endPos.y())
 
         self.repaint()
         QApplication.processEvents()
@@ -510,9 +592,6 @@ class SnipWidget(QMainWindow):
         self.parent.returnSnip(img)
 
 def main(arguments):
-    with in_model_path():
-        if os.name != 'nt':
-            os.environ['QTWEBENGINE_DISABLE_SANDBOX'] = '1'
-        app = QApplication(sys.argv)
-        ex = App(arguments)
-        sys.exit(app.exec())
+    app = QApplication(sys.argv)
+    App(arguments)
+    sys.exit(app.exec())

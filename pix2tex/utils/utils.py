@@ -1,13 +1,14 @@
-import random
+import contextlib
 import os
-import cv2
+import random
 import re
-from PIL import Image
+from inspect import isfunction
+
+import cv2
 import numpy as np
 import torch
 from munch import Munch
-from inspect import isfunction
-import contextlib
+from PIL import Image
 
 operators = '|'.join(['arccos', 'arcsin', 'arctan', 'arg', 'cos', 'cosh', 'cot', 'coth', 'csc', 'deg', 'det', 'dim', 'exp', 'gcd', 'hom', 'inf',
                       'injlim', 'ker', 'lg', 'lim', 'liminf', 'limsup', 'ln', 'log', 'max', 'min', 'Pr', 'projlim', 'sec', 'sin', 'sinh', 'sup', 'tan', 'tanh'])
@@ -46,7 +47,7 @@ def seed_everything(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = False
 
 
 def parse_args(args, **kwargs) -> Munch:
@@ -79,12 +80,18 @@ def gpu_memory_check(model, args):
     try:
         batchsize = args.batchsize if args.get('micro_batchsize', -1) == -1 else args.micro_batchsize
         for _ in range(5):
-            im = torch.empty(batchsize, args.channels, args.max_height, args.min_height, device=args.device).float()
+            im = torch.empty(
+                batchsize,
+                args.channels,
+                args.max_height,
+                args.max_width,
+                device=args.device,
+            ).float()
             seq = torch.randint(0, args.num_tokens, (batchsize, args.max_seq_len), device=args.device).long()
             loss = model.data_parallel(im, device_ids=args.gpu_devices, tgt_seq=seq)
             loss.sum().backward()
-    except RuntimeError:
-        raise RuntimeError("The system cannot handle a batch size of %i for the maximum image size (%i, %i). Try to use a smaller micro batchsize." % (batchsize, args.max_height, args.max_width))
+    except RuntimeError as error:
+        raise RuntimeError("The system cannot handle a batch size of %i for the maximum image size (%i, %i). Try to use a smaller micro batchsize." % (batchsize, args.max_height, args.max_width)) from error
     model.zero_grad()
     with torch.cuda.device(args.device):
         torch.cuda.empty_cache()
@@ -114,7 +121,11 @@ def pad(img: Image, divable: int = 32) -> Image:
         data = (data[..., 0]).astype(np.uint8)
     else:
         data = (255-data[..., -1]).astype(np.uint8)
-    data = (data-data.min())/(data.max()-data.min())*255
+    data_min = data.min()
+    data_max = data.max()
+    if data_max == data_min:
+        raise ValueError("The image is blank; no formula foreground was detected")
+    data = (data-data_min)/(data_max-data_min)*255
     if data.mean() > threshold:
         # To invert the text to white
         gray = 255*(data < threshold).astype(np.uint8)
@@ -123,6 +134,8 @@ def pad(img: Image, divable: int = 32) -> Image:
         data = 255-data
 
     coords = cv2.findNonZero(gray)  # Find all non-zero points (text)
+    if coords is None:
+        raise ValueError("The image contains no detectable formula foreground")
     a, b, w, h = cv2.boundingRect(coords)  # Find minimum spanning bounding box
     rect = data[b:b+h, a:a+w]
     im = Image.fromarray(rect).convert('L')
@@ -146,7 +159,7 @@ def post_process(s: str):
     """
     text_reg = r'(\\(operatorname|mathrm|text|mathbf)\s?\*? {.*?})'
     letter = '[a-zA-Z]'
-    noletter = '[\W_^\d]'
+    noletter = r'[\W_^\d]'
     names = [x[0].replace(' ', '') for x in re.findall(text_reg, s)]
     s = re.sub(text_reg, lambda match: str(names.pop(0)), s)
     news = s

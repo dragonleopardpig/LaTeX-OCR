@@ -1,9 +1,11 @@
-import requests
-from PIL import Image
-import streamlit as st
-from st_img_pastebutton import paste
-from io import BytesIO
 import base64
+import os
+from io import BytesIO
+
+import requests
+import streamlit as st
+from PIL import Image
+from st_img_pastebutton import paste
 
 
 def encode_image(file):
@@ -47,13 +49,21 @@ if __name__ == "__main__":
     if st.button("Convert"):
         if image is not None:
             with st.spinner("Computing"):
-                response = requests.post(
-                    "http://127.0.0.1:8502/predict/", files={"file": image}
-                )
+                try:
+                    api_key = os.environ.get('PIX2TEX_API_KEY')
+                    response = requests.post(
+                        "http://127.0.0.1:8502/predict/",
+                        files={"file": image},
+                        headers={'X-API-Key': api_key} if api_key else None,
+                        timeout=180,
+                    )
+                except requests.RequestException as error:
+                    st.error(f"The local OCR service is unavailable: {error}")
+                    st.stop()
             if response.ok:
                 latex_code = response.json()
                 st.code(latex_code, language="latex")
-                st.markdown(f"$\\displaystyle {latex_code}$")
+                st.latex(latex_code)
             else:
                 st.error(response.text)
         else:

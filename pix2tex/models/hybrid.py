@@ -1,15 +1,14 @@
 import torch
-import torch.nn as nn
-
+from einops import repeat
+from timm.models.layers import StdConv2dSame
+from timm.models.resnetv2 import ResNetV2
 from timm.models.vision_transformer import VisionTransformer
 from timm.models.vision_transformer_hybrid import HybridEmbed
-from timm.models.resnetv2 import ResNetV2
-from timm.models.layers import StdConv2dSame
-from einops import repeat
+
 
 class CustomVisionTransformer(VisionTransformer):
     def __init__(self, img_size=224, patch_size=16, *args, **kwargs):
-        super(CustomVisionTransformer, self).__init__(img_size=img_size, patch_size=patch_size, *args, **kwargs)
+        super().__init__(*args, img_size=img_size, patch_size=patch_size, **kwargs)
         self.height, self.width = img_size
         self.patch_size = patch_size
 

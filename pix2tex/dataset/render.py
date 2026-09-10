@@ -1,31 +1,26 @@
 
-from pix2tex.dataset.latex2png import Latex, tex2pil
 import argparse
-import sys
-import os
 import glob
+import os
 import shutil
-from tqdm.auto import tqdm
+import sys
+from pathlib import Path
+
 import cv2
 import numpy as np
 from PIL import Image
-import subprocess
+from tqdm.auto import tqdm
+
+from pix2tex.dataset.latex2png import Latex, tex2pil
 
 
 def get_installed_fonts(tex_path: str):
-    cmd = "find %s -name *Math*.otf" % tex_path
-    process = subprocess.Popen(cmd,
-                               stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE,
-                               universal_newlines=True,
-                               shell=True
-                               )
-    stdout, stderr = process.communicate()
-    if process.returncode != 0:
-        raise Exception(stderr)
-    fonts = [_.split(os.sep)[-1] for _ in stdout.split('\n')][:-1]
+    root = Path(tex_path).expanduser()
+    if not root.is_dir():
+        raise FileNotFoundError(f"TeX font directory not found: {root}")
+    fonts = [font.name for font in root.rglob('*Math*.otf')]
     fonts.extend(["Latin Modern Math"]*len(fonts))
-    return fonts
+    return sorted(set(fonts))
 
 
 def render_dataset(dataset: np.ndarray, unrendered: np.ndarray, args) -> np.ndarray:

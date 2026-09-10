@@ -1,4 +1,8 @@
-import sys, logging, argparse, os
+import argparse
+import logging
+import os
+import sys
+
 
 def process_args(args):
     parser = argparse.ArgumentParser(description='Generate vocabulary file.')
@@ -21,7 +25,7 @@ def process_args(args):
                         ))
     parser.add_argument('--log-path', dest="log_path",
                         type=str, default='log.txt',
-                        help=('Log file path, default=log.txt' 
+                        help=('Log file path, default=log.txt'
                         ))
     parameters = parser.parse_args(args)
     return parameters
@@ -48,7 +52,6 @@ def main(args):
 
     formulas = open(label_path).readlines()
     vocab = {}
-    max_len = 0
     with open(data_path) as fin:
         for line in fin:
             _, line_idx = line.strip().split()

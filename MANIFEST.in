@@ -1,1 +1,1 @@
-exclude **\*.pth 
+global-exclude *.pth

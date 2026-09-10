@@ -7,7 +7,7 @@ The goal of this project is to create a learning based system that takes an imag
 ![header](https://user-images.githubusercontent.com/55287601/109183599-69431f00-778e-11eb-9809-d42b9451e018.png)
 
 ## Using the model
-To run the model you need Python 3.7+
+To run the model you need Python 3.10 or 3.11.
 
 If you don't have PyTorch installed. Follow their instructions [here](https://pytorch.org/get-started/locally/).
 
@@ -17,14 +17,29 @@ Install the package `pix2tex`:
 pip install "pix2tex[gui]"
 ```
 
-Model checkpoints will be downloaded automatically.
+Model checkpoints will be downloaded automatically, verified with SHA-256, and stored in
+the user cache. Set `PIX2TEX_CACHE_DIR` to choose another cache location.
+
+### Reproducible development environment
+
+The repository includes a locked [devenv](https://devenv.sh/) environment with Python
+3.11, CUDA-capable PyTorch, the GUI/API/training extras, XeLaTeX, ImageMagick, Node.js,
+and Wayland screenshot tools. Enter it with:
+
+```bash
+devenv shell
+latexocr
+```
+
+Run the test suite with `devenv test`. The first shell entry downloads Python wheels;
+the model checkpoints are downloaded on first use.
 
 There are three ways to get a prediction from an image. 
 1. You can use the command line tool by calling `pix2tex`. Here you can parse already existing images from the disk and images in your clipboard.
 
 2. Thanks to [@katie-lim](https://github.com/katie-lim), you can use a nice user interface as a quick way to get the model prediction. Just call the GUI with `latexocr`. From here you can take a screenshot and the predicted latex code is rendered using [MathJax](https://www.mathjax.org/) and copied to your clipboard.
 
-    Under linux, it is possible to use the GUI with `gnome-screenshot` (which comes with multiple monitor support). For other Wayland compositers, `grim` and `slurp` will be used for wlroots-based Wayland compositers and `spectacle` for KDE Plasma. Note that `gnome-screenshot` is not compatible with wlroots or Qt based compositers. Since `gnome-screenshot` will be preferred when available, you may have to set the environment variable `SCREENSHOT_TOOL` to `grim` or `spectacle` in these cases (other available values are `gnome-screenshot` and `pil`).
+    On Linux, the GUI automatically uses `spectacle` on KDE Wayland, `grim` plus `slurp` on wlroots compositors such as Hyprland, and `gnome-screenshot` when available elsewhere. Override detection with `SCREENSHOT_TOOL=grim`, `spectacle`, `gnome-screenshot`, or `pil`.
 
     ![demo](https://user-images.githubusercontent.com/55287601/117812740-77b7b780-b262-11eb-81f6-fc19766ae2ae.gif)
 
@@ -34,11 +49,16 @@ There are three ways to get a prediction from an image.
     ```bash
     python -m pix2tex.api.run
     ```
-    to start a [Streamlit](https://streamlit.io/) demo that connects to the API at port 8502. There is also a docker image  available for the API: https://hub.docker.com/r/lukasblecher/pix2tex [![Docker Image Size (latest by date)](https://img.shields.io/docker/image-size/lukasblecher/pix2tex?logo=docker)](https://hub.docker.com/r/lukasblecher/pix2tex)
+    This starts a [Streamlit](https://streamlit.io/) demo that connects to the API at port 8502.
+    The API listens on loopback by default. For a remotely reachable deployment, set
+    `PIX2TEX_API_KEY` and send it in the `X-API-Key` header. Uploads are limited to 10 MiB
+    and 20 megapixels by default; `PIX2TEX_MAX_UPLOAD_BYTES` and
+    `PIX2TEX_MAX_IMAGE_PIXELS` can adjust those limits.
+    There is also a docker image available for the API: https://hub.docker.com/r/lukasblecher/pix2tex [![Docker Image Size (latest by date)](https://img.shields.io/docker/image-size/lukasblecher/pix2tex?logo=docker)](https://hub.docker.com/r/lukasblecher/pix2tex)
 
     ```
     docker pull lukasblecher/pix2tex:api
-    docker run --rm -p 8502:8502 lukasblecher/pix2tex:api
+    docker run --rm -p 127.0.0.1:8502:8502 lukasblecher/pix2tex:api
     ```
     To also run the streamlit demo run
     ```

@@ -1,17 +1,19 @@
-from pix2tex.dataset.dataset import Im2LatexDataset
 import argparse
 import logging
-import yaml
 
 import numpy as np
 import torch
-from torchtext.data import metrics
-from munch import Munch
-from tqdm.auto import tqdm
 import wandb
+import yaml
 from Levenshtein import distance
+from munch import Munch
+from torchtext.data import metrics
+from tqdm.auto import tqdm
 
-from pix2tex.models import get_model, Model
+from pix2tex.cli import MODEL_DIRECTORY, resolve_model_path
+from pix2tex.dataset.dataset import Im2LatexDataset
+from pix2tex.model.checkpoints.get_latest_checkpoint import download_checkpoints
+from pix2tex.models import Model, get_model
 from pix2tex.utils import *
 
 
@@ -55,7 +57,11 @@ def evaluate(model: Model, dataset: Im2LatexDataset, args: Munch, num_batches: i
         pred = detokenize(dec, dataset.tokenizer)
         truth = detokenize(seq['input_ids'], dataset.tokenizer)
         bleus.append(metrics.bleu_score(pred, [alternatives(x) for x in truth]))
-        for predi, truthi in zip(token2str(dec, dataset.tokenizer), token2str(seq['input_ids'], dataset.tokenizer)):
+        for predi, truthi in zip(
+            token2str(dec, dataset.tokenizer),
+            token2str(seq['input_ids'], dataset.tokenizer),
+            strict=True,
+        ):
             ts = post_process(truthi)
             if len(ts) > 0:
                 edit_dists.append(distance(post_process(predi), ts)/len(ts))
@@ -108,11 +114,11 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--num-batches', type=int, default=None, help='how many batches to evaluate on. Defaults to None (all)')
 
     parsed_args = parser.parse_args()
-    if parsed_args.config is None:
-        with in_model_path():
-            parsed_args.config = os.path.realpath('settings/config.yaml')
-    with open(parsed_args.config, 'r') as f:
-        params = yaml.load(f, Loader=yaml.FullLoader)
+    parsed_args.config = resolve_model_path(
+        parsed_args.config, MODEL_DIRECTORY / 'settings' / 'config.yaml'
+    )
+    with open(parsed_args.config, 'r', encoding='utf-8') as f:
+        params = yaml.safe_load(f)
     args = parse_args(Munch(params))
     args.testbatchsize = parsed_args.batchsize
     args.wandb = False
@@ -121,9 +127,10 @@ if __name__ == '__main__':
     seed_everything(args.seed if 'seed' in args else 42)
     model = get_model(args)
     if parsed_args.checkpoint is None:
-        with in_model_path():
-            parsed_args.checkpoint = os.path.realpath('checkpoints/weights.pth')
-    model.load_state_dict(torch.load(parsed_args.checkpoint, args.device))
+        parsed_args.checkpoint = download_checkpoints()['weights.pth']
+    model.load_state_dict(
+        torch.load(parsed_args.checkpoint, map_location=args.device, weights_only=True)
+    )
     dataset = Im2LatexDataset().load(parsed_args.data)
     valargs = args.copy()
     valargs.update(batchsize=args.testbatchsize, keep_smaller_batches=True, test=True)

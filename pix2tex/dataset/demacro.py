@@ -1,10 +1,11 @@
 # modified from https://tex.stackexchange.com/a/521639
 
 import argparse
-import re
 import logging
-from collections import Counter
+import re
 import time
+from collections import Counter
+
 from pix2tex.dataset.extract_latex import remove_labels
 
 
@@ -62,9 +63,16 @@ def sweep(t, cmds):
         nargs = int(c[1][1]) if c[1] != r'' else 0
         optional = c[2] != r''
         if nargs == 0:
-            num_matches += len(re.findall(r'\\%s([\W_^\dĊ])' % c[0], t))
-            if num_matches > 0:
-                t = re.sub(r'\\%s([\W_^\dĊ])' % c[0], r'%s\1' % c[-1].replace('\\', r'\\'), t)
+            pattern = rf'\\{re.escape(c[0])}(?=$|[^a-zA-Z@])'
+            matches = len(re.findall(pattern, t))
+            num_matches += matches
+            if matches > 0:
+                replacement = c[-1]
+                t = re.sub(
+                    pattern,
+                    lambda _match, value=replacement: value,
+                    t,
+                )
         else:
             matches = re.findall(r'(\\%s(?:\[(.+?)\])?' % c[0]+r'{(.+?)}'*(nargs-(1 if optional else 0))+r')', t)
             num_matches += len(matches)
@@ -82,9 +90,23 @@ def unfold(t):
     #t = queue.get()
     t = t.replace('\n', 'Ċ')
     t = bracket_replace(t)
-    commands_pattern = r'\\(?:re)?newcommand\*?{\\(.+?)}[\sĊ]*(\[\d\])?[\sĊ]*(\[.+?\])?[\sĊ]*{(.*?)}'
-    cmds = re.findall(commands_pattern, t)
-    t = re.sub(r'(?<!\\)'+commands_pattern, 'Ċ', t)
+    commands_pattern = (
+        r'\\(?:re)?newcommand\*?[\sĊ]*'
+        r'(?:{[\sĊ]*\\(?P<braced>[a-zA-Z@]+)[\sĊ]*}|\\(?P<bare>[a-zA-Z@]+))'
+        r'[\sĊ]*(?P<nargs>\[\d+\])?[\sĊ]*'
+        r'(?P<optional>\[.+?\])?[\sĊ]*{(?P<body>.*?)}'
+    )
+    matches = list(re.finditer(commands_pattern, t))
+    cmds = [
+        (
+            match.group('braced') or match.group('bare'),
+            match.group('nargs') or '',
+            match.group('optional') or '',
+            match.group('body'),
+        )
+        for match in matches
+    ]
+    t = re.sub(r'(?<!\\)' + commands_pattern, 'Ċ', t)
     cmds = sorted(cmds, key=lambda x: len(x[0]))
     cmd_names = Counter([c[0] for c in cmds])
     for i in reversed(range(len(cmds))):
@@ -113,8 +135,8 @@ def unfold(t):
         pass
     except TimeoutError:
         pass
-    except re.error as e:
-        raise DemacroError(e)
+    except re.error as error:
+        raise DemacroError(error) from error
     t = remove_labels(t.replace('Ċ', '\n'))
     # queue.put(t)
     return t
@@ -164,7 +186,11 @@ def convert(data):
         replace,
         data,
     )
-    return re.sub(r'\\let[\sĊ]*(\\[a-zA-Z]+)\s*=?[\sĊ]*(\\?\w+)*', r'\\newcommand*{\1}{\2}\n', data)
+    return re.sub(
+        r'\\let\s*(\\[a-zA-Z@]+)\s*=?\s*(\\(?:[a-zA-Z@]+|[^\s]))',
+        r'\\newcommand*{\1}{\2}\n',
+        data,
+    )
 
 
 def write(path, data):

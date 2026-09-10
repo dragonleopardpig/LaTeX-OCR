@@ -1,0 +1,118 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pix2tex"
+version = "0.1.4"
+description = "Convert images of mathematical formulas to LaTeX."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = "MIT"
+authors = [
+  { name = "Lukas Blecher", email = "luk.blecher@gmail.com" },
+]
+keywords = ["artificial intelligence", "deep learning", "image to text"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "albumentations==1.4.20",
+  "einops>=0.7,<1",
+  "munch>=4,<5",
+  "numpy>=1.26,<2",
+  "opencv-python-headless>=4.9,<5",
+  "pillow>=10,<12",
+  "platformdirs>=4,<5",
+  "pydantic>=2.9,<2.11",
+  "pyperclip>=1.9,<2",
+  "pyyaml>=6,<7",
+  "requests>=2.32,<3",
+  "timm==0.5.4",
+  "tokenizers>=0.19,<0.20",
+  "torch>=2.3,<2.4",
+  "torchvision>=0.18,<0.19",
+  "tqdm>=4.66,<5",
+  "transformers>=4.41,<4.42",
+  "x-transformers==0.15.0",
+]
+
+[project.optional-dependencies]
+gui = [
+  "latex2sympy2>=1.9.1,<2",
+  "pyqt6>=6.7,<7",
+  "pyqt6-webengine>=6.7,<7",
+  "screeninfo>=0.8,<1",
+]
+api = [
+  "fastapi>=0.115,<1",
+  "python-multipart>=0.0.18,<1",
+  "st-img-pastebutton>=0.0.3,<1",
+  "streamlit>=1.41,<2",
+  "uvicorn[standard]>=0.34,<1",
+]
+train = [
+  "imagesize>=1.4,<2",
+  "python-levenshtein>=0.26,<1",
+  "torchtext==0.18.0",
+  "wandb>=0.19,<1",
+]
+highlight = ["pygments>=2.18,<3"]
+docs = ["myst-parser>=4,<5", "sphinx>=8,<9"]
+
+[project.urls]
+Homepage = "https://github.com/lukas-blecher/LaTeX-OCR/"
+Repository = "https://github.com/lukas-blecher/LaTeX-OCR/"
+
+[project.scripts]
+pix2tex_gui = "pix2tex.__main__:main"
+pix2tex_cli = "pix2tex.__main__:main"
+latexocr = "pix2tex.__main__:main"
+pix2tex = "pix2tex.__main__:main"
+
+[dependency-groups]
+dev = [
+  "bandit>=1.8,<2",
+  "httpx>=0.28,<1",
+  "pytest>=8,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.11,<1",
+]
+
+[tool.setuptools.packages.find]
+include = ["pix2tex*"]
+
+[tool.setuptools.package-data]
+pix2tex = [
+  "resources/*",
+  "model/settings/*.yaml",
+  "model/dataset/*.json",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+  "E501",
+  "F403",
+  "F405",
+]
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.bandit]
+exclude_dirs = ["tests", "pix2tex/dataset/preprocessing/third_party"]
+skips = ["B101", "B105", "B110", "B403", "B404", "B603", "B607"]

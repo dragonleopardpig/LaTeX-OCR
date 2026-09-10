@@ -1,25 +1,27 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim import Adam
-from torch.optim.lr_scheduler import OneCycleLR
-from timm.models.resnetv2 import ResNetV2
-from timm.models.layers import StdConv2dSame
-import numpy as np
-from PIL import Image
-import cv2
-import imagesize
-import yaml
-from tqdm.auto import tqdm
-from pix2tex.utils import *
-from pix2tex.dataset.dataset import *
-from munch import Munch
 import argparse
 from typing import Tuple
 
+import cv2
+import imagesize
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import yaml
+from munch import Munch
+from PIL import Image
+from timm.models.layers import StdConv2dSame
+from timm.models.resnetv2 import ResNetV2
+from torch.optim import Adam
+from torch.optim.lr_scheduler import OneCycleLR
+from tqdm.auto import tqdm
+
+from pix2tex.dataset.dataset import *
+from pix2tex.utils import *
+
 
 def prepare_data(dataloader: Im2LatexDataset) -> Tuple[torch.tensor, torch.tensor]:
-    """Use the data from a dataloader to train a image resizer model. 
+    """Use the data from a dataloader to train a image resizer model.
     Randomly resize the images of one batch in the dataset and return the original resolution along side with the new images.
 
     Args:
@@ -52,7 +54,7 @@ def prepare_data(dataloader: Im2LatexDataset) -> Tuple[torch.tensor, torch.tenso
         im = im.resize((int(width*scale), int(height*scale)), m)
         try:
             im = pad(im)
-        except:
+        except (OSError, ValueError):
             return None, None
         if im is None:
             print(path, 'not found!')
@@ -71,7 +73,7 @@ def prepare_data(dataloader: Im2LatexDataset) -> Tuple[torch.tensor, torch.tenso
         images[i] = F.pad(images[i], (0, x-w, 0, y-h), value=0)
     try:
         images = torch.cat(images).float().unsqueeze(1)
-    except RuntimeError as e:
+    except RuntimeError:
         #print(e, 'Images not working: %s' % (' '.join(list(ims))))
         return None, None
     dataloader.i += 1
@@ -95,12 +97,12 @@ def val(val: Im2LatexDataset, model: ResNetV2, num_samples=400, device='cuda') -
     c, t = 0, 0
     iter(val)
     with torch.no_grad():
-        for i in range(num_samples):
-            im, l = prepare_data(val)
+        for _ in range(num_samples):
+            im, labels = prepare_data(val)
             if im is None:
                 continue
             p = model(im.to(device)).argmax(-1).detach().cpu().numpy()
-            c += (p == l[0].item()).sum()
+            c += (p == labels[0].item()).sum()
             t += len(im)
     model.train()
     return c/t
@@ -110,7 +112,7 @@ def main(args):
     """Train a image resizer model.
 
     Args:
-        args (Munch): Object with properties `data`, `batchsize`, `max_dimensions`, 
+        args (Munch): Object with properties `data`, `batchsize`, `max_dimensions`,
         `valdata`, `channels`, `device`, `resume`, `lr`, `num_epochs`, `valbatches`, `sample_freq`, `out`
     """
     # data
@@ -123,7 +125,9 @@ def main(args):
     model = ResNetV2(layers=[2, 3, 3], num_classes=int(max(args.max_dimensions)//32), global_pool='avg', in_chans=args.channels, drop_rate=.05,
                      preact=True, stem_type='same', conv_layer=StdConv2dSame).to(args.device)
     if args.resume:
-        model.load_state_dict(torch.load(args.resume))
+        model.load_state_dict(
+            torch.load(args.resume, map_location=args.device, weights_only=True)
+        )
     opt = Adam(model.parameters(), lr=args.lr)
     crit = nn.CrossEntropyLoss()
     sched = OneCycleLR(opt, .005, total_steps=args.num_epochs*len(dataloader))
@@ -173,8 +177,8 @@ if __name__ == '__main__':
     if parsed_args.config is None:
         with in_model_path():
             parsed_args.config = os.path.realpath('settings/debug.yaml')
-    with open(parsed_args.config, 'r') as f:
-        params = yaml.load(f, Loader=yaml.FullLoader)
+    with open(parsed_args.config, 'r', encoding='utf-8') as f:
+        params = yaml.safe_load(f)
     args = parse_args(Munch(params), **vars(parsed_args))
     args.update(**vars(parsed_args))
     main(args)

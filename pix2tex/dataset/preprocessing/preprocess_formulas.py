@@ -1,12 +1,13 @@
 # taken and modified from https://github.com/harvardnlp/im2markup
 # tokenize latex formulas
-import sys
-import os
-import re
 import argparse
 import logging
+import os
+import re
 import subprocess
-import shutil
+import sys
+import tempfile
+from pathlib import Path
 
 
 def process_args(args):
@@ -49,44 +50,89 @@ def main(args):
 
     logging.info('Script being executed: %s' % __file__)
 
-    input_file = parameters.input_file
-    output_file = parameters.output_file
-
-    assert os.path.exists(input_file), input_file
-    shutil.copy(input_file, output_file)
-    operators = '\s?'.join('|'.join(['arccos', 'arcsin', 'arctan', 'arg', 'cos', 'cosh', 'cot', 'coth', 'csc', 'deg', 'det', 'dim', 'exp', 'gcd', 'hom', 'inf',
+    input_path = Path(parameters.input_file).resolve()
+    output_path = Path(parameters.output_file).resolve()
+    if not input_path.is_file():
+        raise FileNotFoundError(input_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    operators = r'\s?'.join('|'.join(['arccos', 'arcsin', 'arctan', 'arg', 'cos', 'cosh', 'cot', 'coth', 'csc', 'deg', 'det', 'dim', 'exp', 'gcd', 'hom', 'inf',
                                      'injlim', 'ker', 'lg', 'lim', 'liminf', 'limsup', 'ln', 'log', 'max', 'min', 'Pr', 'projlim', 'sec', 'sin', 'sinh', 'sup', 'tan', 'tanh']))
     ops = re.compile(r'\\operatorname {(%s)}' % operators)
-    temp_file = output_file + '.tmp'
-    with open(temp_file, 'w') as fout:
-        prepre = open(output_file, 'r').read().replace('\r', ' ')  # delete \r
-        # replace split, align with aligned
-        prepre = re.sub(r'\\begin{(split|align|alignedat|alignat|eqnarray)\*?}(.+?)\\end{\1\*?}', r'\\begin{aligned}\2\\end{aligned}', prepre, flags=re.S)
-        prepre = re.sub(r'\\begin{(smallmatrix)\*?}(.+?)\\end{\1\*?}', r'\\begin{matrix}\2\\end{matrix}', prepre, flags=re.S)
-        fout.write(prepre)
+    temporary_paths = []
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            dir=output_path.parent,
+            prefix=f'.{output_path.name}.',
+            suffix='.input.tmp',
+            delete=False,
+        ) as normalized_output:
+            normalized_input = input_path.read_text(encoding='utf-8').replace('\r', ' ')
+            # replace split and align environments with aligned
+            normalized_input = re.sub(r'\\begin{(split|align|alignedat|alignat|eqnarray)\*?}(.+?)\\end{\1\*?}', r'\\begin{aligned}\2\\end{aligned}', normalized_input, flags=re.S)
+            normalized_input = re.sub(r'\\begin{(smallmatrix)\*?}(.+?)\\end{\1\*?}', r'\\begin{matrix}\2\\end{matrix}', normalized_input, flags=re.S)
+            normalized_output.write(normalized_input)
+            normalized_path = Path(normalized_output.name)
+            temporary_paths.append(normalized_path)
 
-    # print(os.path.abspath(__file__))
-    cmd = r"cat %s | node %s %s > %s " % (temp_file, os.path.join(os.path.dirname(__file__), 'preprocess_latex.js'), parameters.mode, output_file)
-    ret = subprocess.call(cmd, shell=True)
-    os.remove(temp_file)
-    if ret != 0:
-        logging.error('FAILED: %s' % cmd)
-    temp_file = output_file + '.tmp'
-    shutil.move(output_file, temp_file)
-    with open(temp_file, 'r') as fin:
-        with open(output_file, 'w') as fout:
-            for line in fin:
+        with tempfile.NamedTemporaryFile(
+            mode='w+b',
+            dir=output_path.parent,
+            prefix=f'.{output_path.name}.',
+            suffix='.node.tmp',
+            delete=False,
+        ) as node_output, normalized_path.open('rb') as node_input:
+            node_path = Path(node_output.name)
+            temporary_paths.append(node_path)
+            result = subprocess.run(
+                [
+                    'node',
+                    str(Path(__file__).with_name('preprocess_latex.js')),
+                    parameters.mode,
+                ],
+                stdin=node_input,
+                stdout=node_output,
+                stderr=subprocess.PIPE,
+                timeout=300,
+            )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"LaTeX preprocessing failed: {result.stderr.decode(errors='replace')}"
+            )
+
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            dir=output_path.parent,
+            prefix=f'.{output_path.name}.',
+            suffix='.output.tmp',
+            delete=False,
+        ) as final_output, node_path.open('r', encoding='utf-8') as processed_input:
+            final_path = Path(final_output.name)
+            temporary_paths.append(final_path)
+            for line in processed_input:
                 tokens = line.strip().split()
-                tokens_out = []
-                for token in tokens:
-                    tokens_out.append(token)
-                if len(tokens_out) > 5:
-                    post = ' '.join(tokens_out)
+                if len(tokens) > 5:
+                    post = ' '.join(tokens)
                     # use \sin instead of \operatorname{sin}
-                    names = ['\\'+x.replace(' ', '') for x in re.findall(ops, post)]
-                    post = re.sub(ops, lambda match: str(names.pop(0)), post).replace(r'\\ \end{array}', r'\end{array}')
-                    fout.write(post+'\n')
-    os.remove(temp_file)
+                    names = ['\\' + value.replace(' ', '') for value in re.findall(ops, post)]
+                    post = re.sub(
+                        ops,
+                        lambda _match, replacements=names: replacements.pop(0),
+                        post,
+                    ).replace(
+                        r'\\ \end{array}', r'\end{array}'
+                    )
+                    final_output.write(post + '\n')
+            final_output.flush()
+            os.fsync(final_output.fileno())
+
+        os.replace(final_path, output_path)
+        temporary_paths.remove(final_path)
+    finally:
+        for temporary_path in temporary_paths:
+            temporary_path.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':

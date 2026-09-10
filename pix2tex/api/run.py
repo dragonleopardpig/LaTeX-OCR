@@ -1,10 +1,14 @@
-from multiprocessing import Process
-import subprocess
 import os
+import subprocess
+import time
+from multiprocessing import Process
 
 
 def start_api(path='.'):
-    subprocess.call(['uvicorn', 'app:app', '--port', '8502'], cwd=path)
+    subprocess.call(
+        ['uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '8502'],
+        cwd=path,
+    )
 
 
 def start_frontend(path='.'):
@@ -17,5 +21,15 @@ if __name__ == '__main__':
     api.start()
     frontend = Process(target=start_frontend, kwargs={'path': path})
     frontend.start()
-    api.join()
-    frontend.join()
+    processes = (api, frontend)
+    try:
+        while all(process.is_alive() for process in processes):
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+        for process in processes:
+            process.join(timeout=5)

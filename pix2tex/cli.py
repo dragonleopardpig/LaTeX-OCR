@@ -1,32 +1,50 @@
-from pix2tex.dataset.transforms import test_transform
-import pandas.io.clipboard as clipboard
-from PIL import ImageGrab
-from PIL import Image
-import os
-from pathlib import Path
-import sys
-from typing import List, Optional, Tuple
 import atexit
-from contextlib import suppress
 import logging
-import yaml
+import os
 import re
+import shlex
+import sys
+from contextlib import suppress
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import numpy as np
+import pyperclip
+import torch
+import yaml
+from munch import Munch
+from PIL import Image, ImageGrab
+from platformdirs import user_data_path
+from timm.models.layers import StdConv2dSame
+from timm.models.resnetv2 import ResNetV2
+from transformers import PreTrainedTokenizerFast
+
+from pix2tex.dataset.latex2png import tex2pil
+from pix2tex.dataset.transforms import test_transform
+from pix2tex.model.checkpoints.get_latest_checkpoint import (
+    checkpoint_directory,
+    download_checkpoints,
+)
+from pix2tex.models import get_model
+from pix2tex.utils import *
 
 with suppress(ImportError, AttributeError):
     import readline
 
-import numpy as np
-import torch
-from torch._appdirs import user_data_dir
-from munch import Munch
-from transformers import PreTrainedTokenizerFast
-from timm.models.resnetv2 import ResNetV2
-from timm.models.layers import StdConv2dSame
+MODEL_DIRECTORY = Path(__file__).resolve().parent / "model"
 
-from pix2tex.dataset.latex2png import tex2pil
-from pix2tex.models import get_model
-from pix2tex.utils import *
-from pix2tex.model.checkpoints.get_latest_checkpoint import download_checkpoints
+
+def resolve_model_path(value: str | os.PathLike | None, default: Path) -> Path:
+    """Resolve CLI paths without changing the process-wide working directory."""
+    if value is None:
+        return default.resolve()
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    local_path = (Path.cwd() / path).resolve()
+    if local_path.exists():
+        return local_path
+    return (MODEL_DIRECTORY / path).resolve()
 
 
 def minmax_size(img: Image, max_dimensions: Tuple[int, int] = None, min_dimensions: Tuple[int, int] = None) -> Image:
@@ -41,13 +59,16 @@ def minmax_size(img: Image, max_dimensions: Tuple[int, int] = None, min_dimensio
         Image: Image with correct dimensionality
     """
     if max_dimensions is not None:
-        ratios = [a/b for a, b in zip(img.size, max_dimensions)]
+        ratios = [a/b for a, b in zip(img.size, max_dimensions, strict=True)]
         if any([r > 1 for r in ratios]):
             size = np.array(img.size)//max(ratios)
             img = img.resize(tuple(size.astype(int)), Image.BILINEAR)
     if min_dimensions is not None:
         # hypothesis: there is a dim in img smaller than min_dimensions, and return a proper dim >= min_dimensions
-        padded_size = [max(img_dim, min_dim) for img_dim, min_dim in zip(img.size, min_dimensions)]
+        padded_size = [
+            max(img_dim, min_dim)
+            for img_dim, min_dim in zip(img.size, min_dimensions, strict=True)
+        ]
         if padded_size != list(img.size):  # assert hypothesis
             padded_im = Image.new('L', padded_size, 255)
             padded_im.paste(img, img.getbbox())
@@ -61,7 +82,6 @@ class LatexOCR:
     image_resizer = None
     last_pic = None
 
-    @in_model_path()
     def __init__(self, arguments=None):
         """Initialize a LatexOCR model
 
@@ -69,30 +89,62 @@ class LatexOCR:
             arguments (Union[Namespace, Munch], optional): Special model parameters. Defaults to None.
         """
         if arguments is None:
-            arguments = Munch({'config': 'settings/config.yaml', 'checkpoint': 'checkpoints/weights.pth', 'no_cuda': True, 'no_resize': False})
-        logging.getLogger().setLevel(logging.FATAL)
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-        with open(arguments.config, 'r') as f:
-            params = yaml.load(f, Loader=yaml.FullLoader)
+            arguments = Munch(
+                {
+                    'config': None,
+                    'checkpoint': None,
+                    'no_cuda': False,
+                    'no_resize': False,
+                }
+            )
+        config_path = resolve_model_path(
+            getattr(arguments, 'config', None),
+            MODEL_DIRECTORY / 'settings' / 'config.yaml',
+        )
+        with config_path.open('r', encoding='utf-8') as f:
+            params = yaml.safe_load(f)
         self.args = parse_args(Munch(params))
-        self.args.update(**vars(arguments))
+        overrides = vars(arguments)
+        self.args.update(**{key: value for key, value in overrides.items() if value is not None})
+        self.args.config = str(config_path)
         self.args.wandb = False
         self.args.device = 'cuda' if torch.cuda.is_available() and not self.args.no_cuda else 'cpu'
-        if not os.path.exists(self.args.checkpoint):
-            download_checkpoints()
+
+        requested_checkpoint = overrides.get('checkpoint')
+        if requested_checkpoint is None:
+            paths = download_checkpoints()
+            self.args.checkpoint = str(paths['weights.pth'])
+        else:
+            self.args.checkpoint = str(
+                resolve_model_path(requested_checkpoint, checkpoint_directory() / 'weights.pth')
+            )
+            if not Path(self.args.checkpoint).is_file():
+                raise FileNotFoundError(f"Checkpoint not found: {self.args.checkpoint}")
+
         self.model = get_model(self.args)
-        self.model.load_state_dict(torch.load(self.args.checkpoint, map_location=self.args.device))
+        self.model.load_state_dict(
+            torch.load(
+                self.args.checkpoint,
+                map_location=self.args.device,
+                weights_only=True,
+            )
+        )
         self.model.eval()
 
-        if 'image_resizer.pth' in os.listdir(os.path.dirname(self.args.checkpoint)) and not arguments.no_resize:
+        resizer_path = Path(self.args.checkpoint).with_name('image_resizer.pth')
+        if resizer_path.is_file() and not getattr(arguments, 'no_resize', False):
             self.image_resizer = ResNetV2(layers=[2, 3, 3], num_classes=max(self.args.max_dimensions)//32, global_pool='avg', in_chans=1, drop_rate=.05,
                                           preact=True, stem_type='same', conv_layer=StdConv2dSame).to(self.args.device)
-            self.image_resizer.load_state_dict(torch.load(os.path.join(os.path.dirname(self.args.checkpoint), 'image_resizer.pth'), map_location=self.args.device))
+            self.image_resizer.load_state_dict(
+                torch.load(resizer_path, map_location=self.args.device, weights_only=True)
+            )
             self.image_resizer.eval()
+        self.args.tokenizer = str(
+            resolve_model_path(self.args.tokenizer, MODEL_DIRECTORY / 'dataset' / 'tokenizer.json')
+        )
         self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=self.args.tokenizer)
 
-    @in_model_path()
-    def __call__(self, img=None, resize=True) -> str:
+    def __call__(self, img=None, resize=True, copy_to_clipboard=True) -> str:
         """Get a prediction from an image
 
         Args:
@@ -131,12 +183,16 @@ class LatexOCR:
             t = test_transform(image=img)['image'][:1].unsqueeze(0)
         im = t.to(self.args.device)
 
-        dec = self.model.generate(im.to(self.args.device), temperature=self.args.get('temperature', .25))
+        with torch.inference_mode():
+            dec = self.model.generate(
+                im.to(self.args.device), temperature=self.args.get('temperature', .25)
+            )
         pred = post_process(token2str(dec, self.tokenizer)[0])
-        try:
-            clipboard.copy(pred)
-        except:
-            pass
+        if copy_to_clipboard:
+            try:
+                pyperclip.copy(pred)
+            except pyperclip.PyperclipException:
+                logging.getLogger(__name__).debug("No system clipboard provider is available")
         return pred
 
 
@@ -146,8 +202,8 @@ def output_prediction(pred, args):
         TERM = 'dumb'
     try:
         from pygments import highlight
-        from pygments.lexers import get_lexer_by_name
         from pygments.formatters import get_formatter_by_name
+        from pygments.lexers import get_lexer_by_name
 
         if TERM.split('-')[-1] == '256color':
             formatter_name = 'terminal256'
@@ -168,7 +224,7 @@ def output_prediction(pred, args):
             if args.katex:
                 raise ValueError
             tex2pil([f'$${pred}$$'])[0].show()
-        except Exception as e:
+        except Exception:
             # render using katex
             import webbrowser
             from urllib.parse import quote
@@ -193,10 +249,10 @@ def predict(model, file, arguments):
     pred = model(img)
     output_prediction(pred, arguments)
 
-def check_file_path(paths:List[Path], wdir:Optional[Path]=None)->List[str]:
+def check_file_path(paths: List[Path], wdir: Optional[Path] = None) -> List[str]:
     files = []
     for path in paths:
-        if type(path)==str:
+        if isinstance(path, str):
             if path=='':
                 continue
             path=Path(path)
@@ -206,10 +262,10 @@ def check_file_path(paths:List[Path], wdir:Optional[Path]=None)->List[str]:
                 files.append(str(p.resolve()))
             elif '*' in path.name:
                 files.extend([str(pi.resolve()) for pi in p.parent.glob(p.name)])
-    return list(set(files))
+    return sorted(set(files))
 
 def main(arguments):
-    path = user_data_dir('pix2tex')
+    path = user_data_path('pix2tex')
     os.makedirs(path, exist_ok=True)
     history_file = os.path.join(path, 'history.txt')
     with suppress(NameError):
@@ -254,7 +310,7 @@ def main(arguments):
 
         You might get a different prediction every time you submit the same image. If the result you got was close you
         can just predict the same image by pressing ENTER again. If that still does not work you can change the temperature
-        or you have to take another picture with another resolution (e.g. zoom out and take a screenshot with lower resolution). 
+        or you have to take another picture with another resolution (e.g. zoom out and take a screenshot with lower resolution).
 
         Press "x" to close the program.
         You can interrupt the model if it takes too long by pressing Ctrl+C.
@@ -278,7 +334,12 @@ def main(arguments):
                 model.args.temperature = float(t)+1e-8
                 print('new temperature: T=%.3f' % model.args.temperature)
                 continue
-            files = check_file_path(file.split(' '), wdir)
+            try:
+                entered_paths = shlex.split(file)
+            except ValueError as error:
+                print(f"Invalid path quoting: {error}")
+                continue
+            files = check_file_path(entered_paths, wdir)
             with suppress(KeyboardInterrupt):
                 if files:
                     for file in files:
