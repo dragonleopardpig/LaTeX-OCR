@@ -4,6 +4,19 @@ from x_transformers import Decoder, TransformerWrapper
 from x_transformers.autoregressive_wrapper import AutoregressiveWrapper, top_k, top_p
 
 
+def sample_next_token(logits, temperature, filter_logits_fn=top_k, filter_thres=0.9):
+    """Choose the most likely token at zero temperature, otherwise sample."""
+    if temperature <= 0:
+        return logits.argmax(dim=-1, keepdim=True)
+    filtered_logits = (
+        filter_logits_fn(logits, thres=filter_thres)
+        if filter_logits_fn in {top_k, top_p}
+        else logits
+    )
+    probabilities = F.softmax(filtered_logits / temperature, dim=-1)
+    return torch.multinomial(probabilities, 1)
+
+
 class CustomARWrapper(AutoregressiveWrapper):
     def __init__(self, *args, **kwargs):
         super(CustomARWrapper, self).__init__(*args, **kwargs)
@@ -30,11 +43,12 @@ class CustomARWrapper(AutoregressiveWrapper):
             # print('arw:',out.shape)
             logits = self.net(x, mask=mask, **kwargs)[:, -1, :]
 
-            if filter_logits_fn in {top_k, top_p}:
-                filtered_logits = filter_logits_fn(logits, thres=filter_thres)
-                probs = F.softmax(filtered_logits / temperature, dim=-1)
-
-            sample = torch.multinomial(probs, 1)
+            sample = sample_next_token(
+                logits,
+                temperature,
+                filter_logits_fn,
+                filter_thres,
+            )
 
             out = torch.cat((out, sample), dim=-1)
             mask = F.pad(mask, (0, 1), value=True)

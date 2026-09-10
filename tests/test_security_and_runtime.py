@@ -5,16 +5,19 @@ import tarfile
 from shutil import which
 
 import pytest
+import torch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from pix2tex.api.app import ContentSizeLimitMiddleware, decode_image
+from pix2tex.cli import resize_to_width
 from pix2tex.dataset.arxiv import _safe_extract
 from pix2tex.dataset.dataset import Im2LatexDataset
 from pix2tex.dataset.latex2png import Latex
 from pix2tex.dataset.preprocessing.preprocess_formulas import main as preprocess_formulas
 from pix2tex.gui import App, load_capture, prediction_page, screenshot_tool
+from pix2tex.models.transformer import sample_next_token
 from pix2tex.utils.utils import pad
 
 
@@ -48,6 +51,24 @@ def test_safe_extract_rejects_path_traversal(tmp_path):
 def test_blank_images_report_a_clear_error():
     with pytest.raises(ValueError, match='blank'):
         pad(Image.new('RGB', (64, 32), 'white'))
+
+
+def test_final_resizing_does_not_accumulate_aspect_ratio_drift():
+    source = Image.new('L', (640, 128), 'white')
+
+    intermediate = resize_to_width(source, 416)
+    final = resize_to_width(source, 320)
+
+    assert intermediate.size == (416, 83)
+    assert final.size == (320, 64)
+
+
+def test_zero_temperature_decoding_is_deterministic():
+    logits = torch.tensor([[0.1, 4.0, 2.0]])
+
+    samples = [sample_next_token(logits, temperature=0).item() for _ in range(10)]
+
+    assert samples == [1] * 10
 
 
 def test_prediction_page_escapes_model_output():

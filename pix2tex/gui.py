@@ -207,6 +207,7 @@ class App(QMainWindow):
         self.tempField.setValue(self.args.temperature)
         self.tempField.setRange(0, 1)
         self.tempField.setSingleStep(0.1)
+        self.tempField.setToolTip("0 is deterministic; higher values generate alternatives")
 
         # Create snip button
         if sys.platform == "darwin":
@@ -406,8 +407,6 @@ class App(QMainWindow):
         self.show()
         try:
             self.model.args.temperature = self.tempField.value()
-            if self.model.args.temperature == 0:
-                self.model.args.temperature = 1e-8
         except (AttributeError, TypeError, ValueError):
             logging.getLogger(__name__).debug("Could not update model temperature")
         # Run the model in a separate thread

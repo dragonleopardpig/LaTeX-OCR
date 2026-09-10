@@ -76,6 +76,15 @@ def minmax_size(img: Image, max_dimensions: Tuple[int, int] = None, min_dimensio
     return img
 
 
+def resize_to_width(image: Image.Image, width: int) -> Image.Image:
+    """Resize from the original dimensions without accumulating aspect-ratio drift."""
+    if width <= 0:
+        raise ValueError("Target image width must be positive")
+    height = max(1, round(image.height * width / image.width))
+    resampling = Image.Resampling.BILINEAR if width > image.width else Image.Resampling.LANCZOS
+    return image.resize((width, height), resampling)
+
+
 class LatexOCR:
     '''Get a prediction of an image in the easiest way'''
 
@@ -164,20 +173,70 @@ class LatexOCR:
                 img = self.last_pic.copy()
         else:
             self.last_pic = img.copy()
-        img = minmax_size(pad(img), self.args.max_dimensions, self.args.min_dimensions)
+        # Keep an unpadded foreground image for the final resize. Scaling an
+        # already padded canvas changes the equation's aspect ratio and can
+        # turn similar glyphs (for example r/Γ and t/r) into model errors.
+        foreground_image = pad(img, divable=1)
+        img = minmax_size(
+            pad(img),
+            self.args.max_dimensions,
+            self.args.min_dimensions,
+        )
         if (self.image_resizer is not None and not self.args.no_resize) and resize:
             with torch.no_grad():
-                input_image = img.convert('RGB').copy()
-                r, w, h = 1, input_image.size[0], input_image.size[1]
+                probe_image = img.convert('RGB').copy()
+                scale = 1
+                probe_width, probe_height = probe_image.size
                 for _ in range(10):
-                    h = int(h * r)  # height to resize
-                    img = pad(minmax_size(input_image.resize((w, h), Image.Resampling.BILINEAR if r > 1 else Image.Resampling.LANCZOS), self.args.max_dimensions, self.args.min_dimensions))
+                    probe_height = max(1, int(probe_height * scale))
+                    resampling = (
+                        Image.Resampling.BILINEAR
+                        if scale > 1
+                        else Image.Resampling.LANCZOS
+                    )
+                    resized_image = probe_image.resize(
+                        (probe_width, probe_height),
+                        resampling,
+                    )
+                    img = pad(
+                        minmax_size(
+                            resized_image,
+                            self.args.max_dimensions,
+                            self.args.min_dimensions,
+                        )
+                    )
                     t = test_transform(image=np.array(img.convert('RGB')))['image'][:1].unsqueeze(0)
-                    w = (self.image_resizer(t.to(self.args.device)).argmax(-1).item()+1)*32
-                    logging.info(r, img.size, (w, int(input_image.size[1]*r)))
-                    if (w == img.size[0]):
+                    predicted_width = (
+                        self.image_resizer(t.to(self.args.device)).argmax(-1).item() + 1
+                    ) * 32
+                    logging.debug(
+                        "OCR resizer input=%s predicted_width=%d",
+                        img.size,
+                        predicted_width,
+                    )
+                    if predicted_width == img.width:
                         break
-                    r = w/img.size[0]
+                    scale = predicted_width / img.width
+                    probe_width = predicted_width
+                # Probe images may accumulate rounding and padding distortion.
+                # Rebuild the decoder input once from the original foreground.
+                foreground_width = max(
+                    1,
+                    round(img.width * foreground_image.width / probe_image.width),
+                )
+                img = pad(
+                    minmax_size(
+                        resize_to_width(foreground_image, foreground_width),
+                        self.args.max_dimensions,
+                        self.args.min_dimensions,
+                    )
+                )
+                logging.debug(
+                    "OCR decoder foreground_width=%d input=%s",
+                    foreground_width,
+                    img.size,
+                )
+                t = test_transform(image=np.array(img.convert('RGB')))['image'][:1].unsqueeze(0)
         else:
             img = np.array(pad(img).convert('RGB'))
             t = test_transform(image=img)['image'][:1].unsqueeze(0)
@@ -331,7 +390,7 @@ def main(arguments):
                 continue
             elif t is not None:
                 t = t.groups()[0]
-                model.args.temperature = float(t)+1e-8
+                model.args.temperature = float(t)
                 print('new temperature: T=%.3f' % model.args.temperature)
                 continue
             try:
