@@ -381,7 +381,7 @@ def main(arguments):
 
     Settings:
         to toggle one of these settings: 'show', 'katex', 'no_resize' just type it into the console
-        Change the temperature (default=0.333) type: "t=0.XX" to set a new temperature.
+        Change the temperature (default=0) type: "t=0.XX" to set a new temperature.
                     ''')
                 continue
             elif ins in ['show', 'katex', 'no_resize']:

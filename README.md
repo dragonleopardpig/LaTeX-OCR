@@ -43,7 +43,7 @@ There are three ways to get a prediction from an image.
 
     ![demo](https://user-images.githubusercontent.com/55287601/117812740-77b7b780-b262-11eb-81f6-fc19766ae2ae.gif)
 
-    If the model is unsure about the what's in the image it might output a different prediction every time you click "Retry". With the `temperature` parameter you can control this behavior (low temperature will produce the same result).
+    Temperature `0` is the deterministic default. Increase the `temperature` control if you deliberately want a different sampled prediction when clicking "Retry".
 
 3. You can use an API. This has additional dependencies. Install via `pip install -U "pix2tex[api]"` and run
     ```bash

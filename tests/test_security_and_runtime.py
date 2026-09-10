@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from pix2tex.__main__ import build_parser
 from pix2tex.api.app import ContentSizeLimitMiddleware, decode_image
 from pix2tex.cli import resize_to_width
 from pix2tex.dataset.arxiv import _safe_extract
@@ -69,6 +70,13 @@ def test_zero_temperature_decoding_is_deterministic():
     samples = [sample_next_token(logits, temperature=0).item() for _ in range(10)]
 
     assert samples == [1] * 10
+
+
+def test_command_line_default_does_not_override_model_temperature():
+    arguments = build_parser().parse_args([])
+
+    assert arguments.temperature is None
+    assert build_parser().parse_args(['--temperature', '0.4']).temperature == 0.4
 
 
 def test_prediction_page_escapes_model_output():

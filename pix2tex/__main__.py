@@ -1,9 +1,17 @@
 #!/usr/bin/env python
-def main():
+
+
+def build_parser():
     from argparse import ArgumentParser
 
     parser = ArgumentParser()
-    parser.add_argument('-t', '--temperature', type=float, default=.333, help='Softmax sampling frequency')
+    parser.add_argument(
+        '-t',
+        '--temperature',
+        type=float,
+        default=None,
+        help='Sampling temperature (default: value from the model config)',
+    )
     parser.add_argument('-c', '--config', type=str, default=None, help='path to config file')
     parser.add_argument('-m', '--checkpoint', type=str, default=None, help='path to weights file')
     parser.add_argument('--no-cuda', action='store_true', help='Compute on CPU')
@@ -15,7 +23,11 @@ def main():
     parser.add_argument('--gui', action='store_true', help='Use GUI (gui only)')
 
     parser.add_argument('file', nargs='*', type=str, default=None, help='Predict LaTeX code from image file instead of clipboard (cli only)')
-    arguments = parser.parse_args()
+    return parser
+
+
+def main():
+    arguments = build_parser().parse_args()
 
     import os
     import sys
