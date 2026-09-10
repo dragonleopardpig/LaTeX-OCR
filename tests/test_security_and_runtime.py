@@ -19,7 +19,7 @@ from pix2tex.dataset.latex2png import Latex
 from pix2tex.dataset.preprocessing.preprocess_formulas import main as preprocess_formulas
 from pix2tex.gui import App, load_capture, prediction_page, prepare_capture, screenshot_tool
 from pix2tex.models.transformer import sample_next_token
-from pix2tex.utils.utils import pad
+from pix2tex.utils.utils import pad, post_process
 
 
 def test_safe_extract_accepts_regular_files(tmp_path):
@@ -70,6 +70,18 @@ def test_zero_temperature_decoding_is_deterministic():
     samples = [sample_next_token(logits, temperature=0).item() for _ in range(10)]
 
     assert samples == [1] * 10
+
+
+def test_post_process_repairs_safe_model_command_artifacts():
+    prediction = (
+        r'\mathrm{t}_{13}=\frac{\mathrm{exp}(-j\varphi)}'
+        r'{\mathrm{1}-\mathrm{r}_{21}\mathrm{exp}\l(-j2\varphi)}'
+    )
+
+    assert post_process(prediction) == (
+        r'\mathrm{t}_{13}=\frac{\exp(-j\varphi)}'
+        r'{1-\mathrm{r}_{21}\exp(-j2\varphi)}'
+    )
 
 
 def test_command_line_default_does_not_override_model_temperature():

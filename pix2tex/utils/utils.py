@@ -13,6 +13,9 @@ from PIL import Image
 operators = '|'.join(['arccos', 'arcsin', 'arctan', 'arg', 'cos', 'cosh', 'cot', 'coth', 'csc', 'deg', 'det', 'dim', 'exp', 'gcd', 'hom', 'inf',
                       'injlim', 'ker', 'lg', 'lim', 'liminf', 'limsup', 'ln', 'log', 'max', 'min', 'Pr', 'projlim', 'sec', 'sin', 'sinh', 'sup', 'tan', 'tanh'])
 ops = re.compile(r'\\operatorname{(%s)}' % operators)
+styled_operator = re.compile(r'\\(?:operatorname|mathrm)\s*{(%s)}' % operators)
+roman_digits = re.compile(r'\\mathrm\s*{(\d+)}')
+invalid_left_abbreviation = re.compile(r'\\l(?=\s*[([])')
 
 
 class EmptyStepper:
@@ -170,7 +173,12 @@ def post_process(s: str):
         news = re.sub(r'(%s)\s+?(%s)' % (letter, noletter), r'\1\2', news)
         if news == s:
             break
-    return s
+    s = styled_operator.sub(lambda match: rf'\{match.group(1)}', s)
+    s = roman_digits.sub(r'\1', s)
+    # The tokenizer occasionally emits the incomplete command ``\l(`` where
+    # the source has a plain opening parenthesis. Removing the invalid command
+    # preserves the delimiter without inventing an unmatched ``\left``.
+    return invalid_left_abbreviation.sub('', s)
 
 
 def alternatives(s):
