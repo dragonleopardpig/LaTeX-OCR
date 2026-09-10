@@ -11,7 +11,7 @@ from shutil import which
 
 import numpy as np
 from latex2sympy2 import latex2sympy
-from PIL import Image, ImageEnhance, ImageGrab
+from PIL import Image, ImageGrab
 from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import QEvent, Qt, QThread, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QGuiApplication
@@ -43,6 +43,13 @@ def load_capture(source) -> Image.Image:
     with Image.open(source) as image:
         image.load()
         return image.copy()
+
+
+def prepare_capture(image: Image.Image) -> Image.Image:
+    """Validate a capture without resampling pixels before model preprocessing."""
+    if image.width <= 0 or image.height <= 0:
+        raise ValueError("The captured image is empty")
+    return image
 
 
 def to_sympy(latex):
@@ -387,22 +394,13 @@ class App(QMainWindow):
         self.retryButton.setEnabled(False)
 
         if img is not None:
-            width, height = img.size
-            if width <= 0 or height <= 0:
+            try:
+                img = prepare_capture(img)
+            except ValueError:
                 self.toggleProcessing(False)
                 self.retryButton.setEnabled(True)
                 self.show()
                 return
-
-            if width < 100 or height < 100: # too small size will make OCR wrong
-                scale_factor = max(100 / width, 100 / height)
-                new_width = int(width * scale_factor)
-                new_height = int(height * scale_factor)
-                img = img.resize((new_width,new_height), Image.Resampling.LANCZOS)
-                contrast = ImageEnhance.Contrast(img)
-                img = contrast.enhance(1.5)
-                sharpness = ImageEnhance.Sharpness(img)
-                img = sharpness.enhance(1.5)
 
         self.show()
         try:

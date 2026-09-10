@@ -17,7 +17,7 @@ from pix2tex.dataset.arxiv import _safe_extract
 from pix2tex.dataset.dataset import Im2LatexDataset
 from pix2tex.dataset.latex2png import Latex
 from pix2tex.dataset.preprocessing.preprocess_formulas import main as preprocess_formulas
-from pix2tex.gui import App, load_capture, prediction_page, screenshot_tool
+from pix2tex.gui import App, load_capture, prediction_page, prepare_capture, screenshot_tool
 from pix2tex.models.transformer import sample_next_token
 from pix2tex.utils.utils import pad
 
@@ -108,6 +108,15 @@ def test_capture_is_detached_from_closed_source():
 
     assert capture.size == (7, 5)
     assert capture.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_small_capture_is_not_resampled_before_model_preprocessing():
+    capture = Image.new('L', (40, 20), 'white')
+
+    prepared = prepare_capture(capture)
+
+    assert prepared is capture
+    assert prepared.size == (40, 20)
 
 
 def test_retry_slot_does_not_forward_button_checked_state():
