@@ -64,6 +64,11 @@ train = [
 ]
 highlight = ["pygments>=2.18,<3"]
 docs = ["myst-parser>=4,<5", "sphinx>=8,<9"]
+offline = [
+  "ftfy>=6.3,<7",
+  "paddleocr==3.7.0",
+  "paddlepaddle==3.3.1",
+]
 
 [project.urls]
 Homepage = "https://github.com/lukas-blecher/LaTeX-OCR/"
@@ -74,6 +79,7 @@ pix2tex_gui = "pix2tex.__main__:main"
 pix2tex_cli = "pix2tex.__main__:main"
 latexocr = "pix2tex.__main__:main"
 pix2tex = "pix2tex.__main__:main"
+formulaocr-offline = "pix2tex.offline_cli:main"
 
 [dependency-groups]
 dev = [

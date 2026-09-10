@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_path="$(readlink -f "$0")"
+project_dir="$(dirname "$(dirname "$script_path")")"
+environment_file="$project_dir/.devenv/shell-env.sh"
+recognizer="$project_dir/.devenv/state/venv/bin/formulaocr-offline"
+
+cd "$project_dir"
+
+# Reuse the already materialized environment on NixOS.  This avoids evaluating
+# the development shell for every paste while keeping a strictly local runtime.
+if [[ -x "$recognizer" && -r "$environment_file" ]]; then
+  runtime_ld="$(sed -n 's/^export LD_LIBRARY_PATH="\(.*\)"$/\1/p' "$environment_file" | tail -n 1)"
+  if [[ -n "$runtime_ld" ]]; then
+    export LD_LIBRARY_PATH="$runtime_ld"
+    exec "$recognizer" "$@"
+  fi
+fi
+
+exec env FORMULA_OCR_QUIET=1 devenv --quiet shell --offline -- formulaocr-offline "$@"

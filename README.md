@@ -34,6 +34,28 @@ latexocr
 Run the test suite with `devenv test`. The first shell entry downloads Python wheels;
 the model checkpoints are downloaded on first use.
 
+### Fully offline formula recognition
+
+For printed formulas, this fork also provides a deterministic local recognizer based on
+PP-FormulaNet. Install its dependencies and model once while connected:
+
+```bash
+devenv shell
+formulaocr-offline --download-model
+```
+
+After that setup, recognition reads only the model under
+`~/.paddlex/official_models/PP-FormulaNet_plus-L` and does not download anything:
+
+```bash
+scripts/formulaocr-offline path/to/formula.png
+scripts/formulaocr-offline --minder --copy path/to/formula.png
+```
+
+The wrapper enters the locked environment in offline mode, making it suitable for a
+desktop integration. Set `FORMULA_OCR_MODEL_DIR` to use a different local model
+directory. Recognition rejects malformed or unsafe TeX before printing it.
+
 There are three ways to get a prediction from an image. 
 1. You can use the command line tool by calling `pix2tex`. Here you can parse already existing images from the disk and images in your clipboard.
 

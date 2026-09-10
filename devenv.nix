@@ -47,7 +47,10 @@ let
   ];
 in
 {
+  devenv.warnOnNewVersion = false;
+
   packages = with pkgs; [
+    ccache
     ghostscript
     git
     grim
@@ -78,11 +81,13 @@ in
     export LD_LIBRARY_PATH="${lib.makeLibraryPath runtimeLibraries}:/run/opengl-driver/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT"
     export PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
-    echo "LaTeX-OCR devenv"
-    python --version
-    uv sync --all-extras --group dev --frozen 2>/dev/null \
-      || uv sync --all-extras --group dev \
-      || exit $?
+    if [ -z "''${FORMULA_OCR_QUIET:-}" ]; then
+      echo "LaTeX-OCR devenv"
+      python --version
+      uv sync --all-extras --group dev --frozen 2>/dev/null \
+        || uv sync --all-extras --group dev \
+        || exit $?
+    fi
   '';
 
   enterTest = ''
