@@ -26,6 +26,7 @@ let
     nss
     stdenv.cc.cc
     systemd
+    vulkan-loader
     wayland
     xorg.libICE
     xorg.libSM
@@ -68,6 +69,7 @@ in
   env = {
     NO_ALBUMENTATIONS_UPDATE = "1";
     PYTHONNOUSERSITE = "1";
+    QT_STYLE_OVERRIDE = "Fusion";
     UV_PYTHON_DOWNLOADS = "never";
     UV_PYTHON_PREFERENCE = "only-system";
   };

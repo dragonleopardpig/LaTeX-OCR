@@ -37,6 +37,14 @@ from pix2tex import cli
 ACCEPTED_IMAGE_SUFFIX = ['png', 'jpg', 'jpeg']
 RESOURCE_DIRECTORY = Path(__file__).resolve().parent / 'resources'
 
+
+def load_capture(source) -> Image.Image:
+    """Load a screenshot eagerly so it remains valid after its source is closed."""
+    with Image.open(source) as image:
+        image.load()
+        return image.copy()
+
+
 def to_sympy(latex):
     normalized = re.sub(r'operatorname\*{(\w+)}', r'\g<1>', latex)
     sympy_expr = latex2sympy(f'${normalized}$')
@@ -214,7 +222,7 @@ class App(QMainWindow):
         # Create retry button
         self.retryButton = QPushButton('Retry', self)
         self.retryButton.setEnabled(False)
-        self.retryButton.clicked.connect(self.returnSnip)
+        self.retryButton.clicked.connect(self.retryPrediction)
 
         # Create layout
         centralWidget = QWidget()
@@ -290,6 +298,27 @@ class App(QMainWindow):
             self.snipButton.setText('Stopping after current inference…')
             self.snipButton.setEnabled(False)
 
+    @pyqtSlot()
+    def retryPrediction(self):
+        """Retry the last image without forwarding QPushButton's checked state."""
+        self.returnSnip()
+
+    def captureFailed(self, tool, error):
+        """Restore the window after a cancelled or failed external capture."""
+        if isinstance(error, FileNotFoundError):
+            message = f"The screenshot tool {tool!r} is not installed or cannot be started."
+        elif isinstance(error, subprocess.TimeoutExpired):
+            message = f"The {tool} screenshot timed out."
+        elif isinstance(error, subprocess.CalledProcessError):
+            message = "Screenshot cancelled."
+        else:
+            message = f"The {tool} screenshot could not be read."
+        logging.getLogger(__name__).info("%s (%s)", message, error)
+        self.error.setText(message)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def snip_using_gnome_screenshot(self):
         try:
             with tempfile.NamedTemporaryFile() as tmp:
@@ -299,11 +328,9 @@ class App(QMainWindow):
                     timeout=120,
                 )
                 # Use `tmp.name` instead of `tmp.file` due to compatability issues between Pillow and tempfile
-                self.returnSnip(Image.open(tmp.name))
-        except (OSError, subprocess.SubprocessError):
-            print("Failed to load saved screenshot! Did you cancel the screenshot?")
-            print("If you don't have gnome-screenshot installed, please install it.")
-            self.returnSnip()
+                self.returnSnip(load_capture(tmp.name))
+        except (OSError, subprocess.SubprocessError) as error:
+            self.captureFailed("gnome-screenshot", error)
 
     def snip_using_spectacle(self):
         try:
@@ -313,11 +340,9 @@ class App(QMainWindow):
                     check=True,
                     timeout=120,
                 )
-                self.returnSnip(Image.open(tmp.name))
-        except (OSError, subprocess.SubprocessError):
-            print("Failed to load saved screenshot! Did you cancel the screenshot?")
-            print("If you don't have spectacle installed, please install it.")
-            self.returnSnip()
+                self.returnSnip(load_capture(tmp.name))
+        except (OSError, subprocess.SubprocessError) as error:
+            self.captureFailed("spectacle", error)
 
     def snip_using_grim(self):
         try:
@@ -330,11 +355,9 @@ class App(QMainWindow):
             p = subprocess.run(['grim', '-g', geometry, '-'],
                                check=True,
                                capture_output=True)
-            self.returnSnip(Image.open(io.BytesIO(p.stdout)))
-        except (OSError, subprocess.SubprocessError):
-            print("Failed to load saved screenshot! Did you cancel the screenshot?")
-            print("If you don't have slurp and grim installed, please install them.")
-            self.returnSnip()
+            self.returnSnip(load_capture(io.BytesIO(p.stdout)))
+        except (OSError, subprocess.SubprocessError) as error:
+            self.captureFailed("slurp/grim", error)
 
     def returnFromMimeData(self, urls):
         if not urls or not urls[0]:
@@ -344,9 +367,21 @@ class App(QMainWindow):
         suffix = image_url.fileName().rsplit('.', 1)[-1].lower()
         if image_url and image_url.scheme() == 'file' and suffix in ACCEPTED_IMAGE_SUFFIX:
             image_path = image_url.toLocalFile()
-            return self.returnSnip(Image.open(image_path))
+            return self.returnSnip(load_capture(image_path))
 
     def returnSnip(self, img=None):
+        # Qt's clicked signal carries a bool. Treat it as a retry request if a
+        # third-party caller connects the signal directly to this method.
+        if isinstance(img, bool):
+            img = None
+        if img is None and self.model.last_pic is None:
+            self.error.setText("No captured image is available to retry.")
+            self.retryButton.setEnabled(False)
+            self.show()
+            return
+        if img is not None and not isinstance(img, Image.Image):
+            raise TypeError("Captured input must be a PIL image")
+
         self.toggleProcessing(True)
         self.retryButton.setEnabled(False)
 
@@ -428,8 +463,8 @@ class App(QMainWindow):
         elif format_type == "Sympy":
             try:
                 formatted = str(to_sympy(raw))
-            except Exception as e:
-                print(e)
+            except Exception:
+                logging.getLogger(__name__).debug("Failed to parse Sympy expression", exc_info=True)
                 formatted = raw
                 self.error.setText("Failed to parse Sympy expr.")
         else:

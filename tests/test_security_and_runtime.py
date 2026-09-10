@@ -14,7 +14,7 @@ from pix2tex.dataset.arxiv import _safe_extract
 from pix2tex.dataset.dataset import Im2LatexDataset
 from pix2tex.dataset.latex2png import Latex
 from pix2tex.dataset.preprocessing.preprocess_formulas import main as preprocess_formulas
-from pix2tex.gui import prediction_page, screenshot_tool
+from pix2tex.gui import App, load_capture, prediction_page, screenshot_tool
 from pix2tex.utils.utils import pad
 
 
@@ -68,6 +68,57 @@ def test_wayland_prefers_grim_and_slurp(monkeypatch):
     )
 
     assert screenshot_tool() == 'grim'
+
+
+def test_capture_is_detached_from_closed_source():
+    source = io.BytesIO()
+    Image.new('RGB', (7, 5), 'red').save(source, format='PNG')
+
+    capture = load_capture(source)
+    source.close()
+
+    assert capture.size == (7, 5)
+    assert capture.getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_retry_slot_does_not_forward_button_checked_state():
+    class Receiver:
+        received = 'not-called'
+
+        def returnSnip(self, image=None):
+            self.received = image
+
+    receiver = Receiver()
+    App.retryPrediction(receiver)
+
+    assert receiver.received is None
+
+
+def test_qt_checked_state_is_not_treated_as_an_image():
+    class Field:
+        value = None
+
+        def setText(self, value):
+            self.value = value
+
+        def setEnabled(self, value):
+            self.value = value
+
+    class Receiver:
+        model = type('Model', (), {'last_pic': None})()
+        error = Field()
+        retryButton = Field()
+        was_shown = False
+
+        def show(self):
+            self.was_shown = True
+
+    receiver = Receiver()
+    App.returnSnip(receiver, False)
+
+    assert receiver.error.value == "No captured image is available to retry."
+    assert receiver.retryButton.value is False
+    assert receiver.was_shown
 
 
 def test_dataset_state_is_not_shared_between_instances():
